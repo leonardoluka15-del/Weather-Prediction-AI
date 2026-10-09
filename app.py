@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from models.forecasting import prepare_series, forecast, backtest, compare_models
+from models.multi_forecast import forecast_many, TARGETS
 from services.weather_api import find_locations, get_historical
 
 st.set_page_config(page_title="La Météo", page_icon="🌦️", layout="wide")
@@ -131,3 +132,42 @@ if frame is not None:
         st.caption("Model selection uses one chronological holdout and may be optimistic. Weekly seasonality is not annual weather seasonality. Results are experimental.")
 else:
     st.info("Choose a location and fetch online historical data, or upload a CSV/Excel dataset.")
+
+# Phase 3: independent forecasts for several weather measurements.
+if frame is not None:
+    st.divider()
+    st.subheader("Multi-variable forecasting")
+    st.caption("Forecast multiple numerical weather variables. Each model is fitted independently; weather-condition labels are not yet predicted.")
+    choices = [x for x in frame.columns if x != date_column and pd.to_numeric(frame[x], errors="coerce").notna().sum() >= 40]
+    defaults = [x for x in ["temperature_2m_mean", "precipitation_sum", "wind_speed_10m_max"] if x in choices]
+    selected_targets = st.multiselect(
+        "Select variables", choices, default=defaults or choices[:1], max_selections=5)
+    if st.button("Forecast selected variables", disabled=not selected_targets, type="primary"):
+        try:
+            with st.spinner("Training separate models for the selected variables..."):
+                multi_predictions, multi_metrics, failures = forecast_many(
+                    frame, date_column, selected_targets, days, order, model_choice)
+            st.session_state["multi_output"] = (multi_predictions, multi_metrics, failures)
+        except Exception as exc:
+            st.error(f"Unable to generate multi-variable forecasts: {exc}")
+    if "multi_output" in st.session_state:
+        multi_predictions, multi_metrics, failures = st.session_state["multi_output"]
+        st.dataframe(multi_metrics, use_container_width=True, hide_index=True)
+        if failures:
+            st.warning("Some targets could not be forecast: " + " | ".join(failures))
+        for target in multi_predictions["variable"].unique():
+            subset = multi_predictions[multi_predictions["variable"] == target]
+            with st.expander(TARGETS.get(target, target), expanded=True):
+                figure = go.Figure()
+                figure.add_trace(go.Scatter(x=subset["date"], y=subset["predicted"],
+                                            mode="lines+markers", name="Forecast"))
+                figure.add_trace(go.Scatter(x=subset["date"], y=subset["upper_95"],
+                                            line=dict(width=0), showlegend=False))
+                figure.add_trace(go.Scatter(x=subset["date"], y=subset["lower_95"],
+                                            fill="tonexty", line=dict(width=0), name="95% interval"))
+                figure.update_layout(xaxis_title="Date", yaxis_title=TARGETS.get(target, target))
+                st.plotly_chart(figure, use_container_width=True)
+        st.download_button("Download multi-variable forecast CSV",
+                           multi_predictions.to_csv(index=False),
+                           "lameteo_multi_forecast.csv", "text/csv")
+        st.caption("Precipitation and wind point forecasts are clipped to zero where negative. Model intervals are unadjusted.")
