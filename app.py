@@ -8,6 +8,7 @@ import streamlit as st
 from models.forecasting import prepare_series, forecast, backtest, compare_models
 from models.multi_forecast import forecast_many, TARGETS
 from models.conditions import predict_conditions
+from utils.dashboard import combine_forecasts, display_value
 from services.weather_api import find_locations, get_historical
 
 st.set_page_config(page_title="La Météo", page_icon="🌦️", layout="wide")
@@ -204,3 +205,56 @@ if frame is not None:
             st.warning("These are simplified, recursive historical-pattern predictions, not official forecasts. Probabilities are uncalibrated and errors accumulate with horizon.")
     else:
         st.info("Condition forecasting requires a WMO weather_code column. Online historical data includes this column; uploaded files must provide it.")
+
+# Phase 5: unified presentation of predictions generated above.
+if frame is not None:
+    st.divider()
+    st.header("🌤️ Unified daily forecast")
+    st.caption("Combines the independent model results by forecast date. Generate forecasts in the sections above to populate these cards.")
+
+    numerical_result = st.session_state.get("multi_output")
+    categorical_result = st.session_state.get("conditions_output")
+    numeric_table = numerical_result[0] if numerical_result else None
+    category_table = categorical_result[0] if categorical_result else None
+    dashboard = combine_forecasts(numeric_table, category_table)
+
+    if dashboard.empty:
+        st.info("Run 'Forecast selected variables' and/or 'Predict daily conditions' to populate the daily dashboard.")
+    else:
+        try:
+            latest_date = pd.to_datetime(frame[date_column], errors="coerce").max().normalize()
+            first_forecast_date = dashboard["date"].min()
+            if first_forecast_date <= latest_date:
+                st.warning("Some saved forecasts overlap the currently loaded historical data. Re-run the models after changing location or dataset.")
+            if latest_date.date() < date.today() - timedelta(days=2):
+                st.warning(
+                    f"Historical data ends {latest_date.date()}. These predictions follow that date and "
+                    "must not be confused with a forecast starting today."
+                )
+            else:
+                st.info(f"History ends: {latest_date.date()}. Forecasts are dated from the model's final observation.")
+        except Exception:
+            st.warning("Check forecast dates against the historical data before interpreting them.")
+
+        show = dashboard.head(days)
+        for offset in range(0, len(show), 3):
+            cols = st.columns(3)
+            for col, (_, row) in zip(cols, show.iloc[offset:offset + 3].iterrows()):
+                with col:
+                    st.markdown(f"**{row['date']:%a %d %b %Y}**")
+                    if pd.notna(row.get("condition")):
+                        st.markdown(f"### {row.get('icon', '🌦️')} {row['condition']}")
+                    else:
+                        st.markdown("### 🌡️ Numerical forecast")
+                    for target in ["temperature_2m_mean", "temperature_2m_max",
+                                   "temperature_2m_min", "precipitation_sum",
+                                   "wind_speed_10m_max", "relative_humidity_2m_mean"]:
+                        if target in dashboard.columns:
+                            st.write(f"{TARGETS.get(target, target)}: {display_value(row, target)}")
+                    st.divider()
+        st.dataframe(dashboard, hide_index=True, use_container_width=True)
+        st.download_button("Download unified forecast CSV",
+                           dashboard.to_csv(index=False),
+                           "lameteo_daily_forecast.csv", "text/csv")
+        st.caption("Forecasts are independent, so numerical and categorical predictions may disagree. "
+                   "Weather-category probabilities are not calibrated and no real-time forecast is implied.")
