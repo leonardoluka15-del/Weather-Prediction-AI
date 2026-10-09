@@ -1,4 +1,4 @@
-"""Streamlit entry point for Weather Prediction AI."""
+"""Streamlit entry point for La Météo."""
 from datetime import date, timedelta
 from io import BytesIO
 import pandas as pd
@@ -8,9 +8,9 @@ import streamlit as st
 from models.forecasting import prepare_series, forecast, backtest
 from services.weather_api import find_locations, get_historical
 
-st.set_page_config(page_title="Weather Prediction AI", page_icon="🌦️", layout="wide")
-st.title("🌦️ Weather Prediction AI")
-st.caption("Worldwide historical weather data · Upload or online retrieval · ARIMA baseline forecasting")
+st.set_page_config(page_title="La Météo", page_icon="🌦️", layout="wide")
+st.title("🌦️ La Météo")
+st.caption("AI-powered weather forecasting · Worldwide locations · Upload or online data")
 st.warning("Experimental statistical forecast, not an official weather forecast. Not for safety-critical decisions.")
 
 @st.cache_data(ttl=86400, show_spinner=False)
