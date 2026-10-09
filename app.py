@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from models.forecasting import prepare_series, forecast, backtest
+from models.forecasting import prepare_series, forecast, backtest, compare_models
 from services.weather_api import find_locations, get_historical
 
 st.set_page_config(page_title="La Météo", page_icon="🌦️", layout="wide")
@@ -28,6 +28,7 @@ order = (
     st.sidebar.selectbox("Differencing (d)", [0, 1, 2], index=1),
     st.sidebar.selectbox("MA order (q)", [0, 1, 2, 3, 4], index=2),
 )
+model_choice = st.sidebar.radio("Forecast model", ["Automatic (compare ARIMA and SARIMA)", "ARIMA", "SARIMA (weekly)"])
 frame = None
 if source == "Online weather data":
     query = st.text_input("Search a city worldwide", value="Nantes")
@@ -84,18 +85,31 @@ if frame is not None:
     variable = st.selectbox("Variable to forecast", numeric_candidates,
                             index=numeric_candidates.index(preferred) if preferred in numeric_candidates else 0)
     st.info("This baseline forecasts one numeric variable at a time. Daily weather descriptions require a separate model.")
-    if st.button("Train ARIMA and forecast", type="primary"):
+    if st.button("Train model and forecast", type="primary"):
         try:
             series = prepare_series(frame, date_column, variable)
-            with st.spinner("Fitting ARIMA and evaluating holdout performance..."):
-                metrics = backtest(series, order)
-                predictions, aic = forecast(series, days, order)
-            st.session_state["arima_output"] = (series, predictions, metrics, aic, variable)
+            with st.spinner("Evaluating statistical models and generating forecasts..."):
+                comparisons = None
+                if model_choice.startswith("Automatic"):
+                    winner, comparisons, errors = compare_models(series, order)
+                    selected_model = winner["model"]
+                    seasonal_order = winner["seasonal_order"]
+                    metrics = {k: winner[k] for k in ("MAE", "RMSE", "Baseline MAE")}
+                else:
+                    selected_model = model_choice
+                    seasonal_order = (1, 0, 0, 7) if model_choice.startswith("SARIMA") else (0, 0, 0, 0)
+                    metrics = backtest(series, order, seasonal_order)
+                predictions, aic = forecast(series, days, order, seasonal_order)
+            st.session_state["arima_output"] = (series, predictions, metrics, aic, variable, selected_model, comparisons)
         except Exception as exc:
             st.error(f"Model could not be trained: {exc}")
     if "arima_output" in st.session_state:
-        series, predictions, metrics, aic, label = st.session_state["arima_output"]
+        series, predictions, metrics, aic, label, selected_model, comparisons = st.session_state["arima_output"]
         st.subheader(f"Forecast: {label}")
+        st.success(f"Model used: {selected_model}")
+        if comparisons is not None:
+            st.write("Model comparison (chronological holdout; lower MAE is better)")
+            st.dataframe(pd.DataFrame(comparisons).drop(columns=["seasonal_order"]), use_container_width=True)
         cols = st.columns(4)
         cols[0].metric("Holdout MAE", f"{metrics['MAE']:.2f}")
         cols[1].metric("Holdout RMSE", f"{metrics['RMSE']:.2f}")
@@ -114,6 +128,6 @@ if frame is not None:
         st.dataframe(predictions, use_container_width=True)
         st.download_button("Download forecast CSV", predictions.to_csv(index=False),
                            "weather_forecast.csv", "text/csv")
-        st.caption("Holdout metrics use one chronological split. This is an initial baseline, not a seasonal or meteorological model.")
+        st.caption("Model selection uses one chronological holdout and may be optimistic. Weekly seasonality is not annual weather seasonality. Results are experimental.")
 else:
     st.info("Choose a location and fetch online historical data, or upload a CSV/Excel dataset.")
