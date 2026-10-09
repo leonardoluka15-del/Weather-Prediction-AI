@@ -7,6 +7,7 @@ import streamlit as st
 
 from models.forecasting import prepare_series, forecast, backtest, compare_models
 from models.multi_forecast import forecast_many, TARGETS
+from models.conditions import predict_conditions
 from services.weather_api import find_locations, get_historical
 
 st.set_page_config(page_title="La Météo", page_icon="🌦️", layout="wide")
@@ -171,3 +172,35 @@ if frame is not None:
                            multi_predictions.to_csv(index=False),
                            "lameteo_multi_forecast.csv", "text/csv")
         st.caption("Precipitation and wind point forecasts are clipped to zero where negative. Model intervals are unadjusted.")
+
+# Phase 4: lag-based weather condition classification.
+if frame is not None:
+    st.divider()
+    st.subheader("Daily weather conditions")
+    st.caption("Experimental classification of clear, cloudy, rainy and snowy days from historical WMO weather codes.")
+    code_columns = [col for col in frame.columns if "weather_code" in str(col).lower()]
+    if code_columns:
+        code_column = st.selectbox("Historical weather code column", code_columns)
+        if st.button("Predict daily conditions", type="primary"):
+            try:
+                with st.spinner("Training weather-condition classifier..."):
+                    condition_forecast, condition_scores = predict_conditions(
+                        frame, date_column, code_column, days)
+                st.session_state["conditions_output"] = (
+                    condition_forecast, condition_scores)
+            except Exception as exc:
+                st.error(f"Condition classifier could not run: {exc}")
+        if "conditions_output" in st.session_state:
+            condition_forecast, condition_scores = st.session_state["conditions_output"]
+            a, b = st.columns(2)
+            a.metric("Holdout accuracy", f"{condition_scores['holdout_accuracy']:.1%}")
+            b.metric("Balanced accuracy", f"{condition_scores['holdout_balanced_accuracy']:.1%}")
+            st.caption(f"Evaluated over {condition_scores['test_days']} historical days.")
+            st.caption(f"Forecast begins after the final historical record: {condition_scores['history_end'].date()}.")
+            st.dataframe(condition_forecast, hide_index=True, use_container_width=True)
+            st.download_button("Download condition forecast CSV",
+                               condition_forecast.to_csv(index=False),
+                               "lameteo_conditions.csv", "text/csv")
+            st.warning("These are simplified, recursive historical-pattern predictions, not official forecasts. Probabilities are uncalibrated and errors accumulate with horizon.")
+    else:
+        st.info("Condition forecasting requires a WMO weather_code column. Online historical data includes this column; uploaded files must provide it.")
